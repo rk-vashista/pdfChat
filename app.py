@@ -12,26 +12,24 @@ from groq import Groq
 import asyncio
 import os
 from typing import Any, List, Mapping, Optional
+from pydantic import BaseModel, Field
 
 # Load environment variables
 load_dotenv()
 groq_api_key = os.environ.get("GROQ_API_TOKEN")
 
-class GroqWrapper(LLM):
-    client: Groq = None
-    model_name: str = "llama-3.2-11b-vision-preview"
-
-    def __init__(self, api_key: str):
-        super().__init__()
-        self.client = Groq(api_key=api_key)
+class GroqWrapper(LLM, BaseModel):
+    client: Groq = Field(default_factory=lambda: Groq(api_key=groq_api_key))
+    model_name: str = Field(default="llama-3.2-11b-vision-preview")
+    system_prompt: str = Field(default="You are a helpful AI assistant that answers questions based on the content of uploaded PDF documents. Provide concise and accurate responses.")
 
     def _call(self, prompt: str, stop: Optional[List[str]] = None) -> str:
         try:
             completion = self.client.chat.completions.create(
                 model=self.model_name,
                 messages=[
+                    {"role": "system", "content": self.system_prompt},
                     {"role": "user", "content": prompt},
-                    {"role": "assistant", "content": ""},
                 ],
                 temperature=1,
                 max_tokens=1024,
@@ -54,7 +52,7 @@ class GroqWrapper(LLM):
 
     @property
     def _identifying_params(self) -> Mapping[str, Any]:
-        return {"model_name": self.model_name}
+        return {"model_name": self.model_name, "system_prompt": self.system_prompt}
 
 async def get_pdf_text(pdf_docs):
     try:
@@ -91,14 +89,14 @@ async def get_vectorstore(text_chunks):
         st.error(f"Error creating vector store: {e}")
         return None
 
-async def get_conversation_chain(vectorstore):
+async def get_conversation_chain(vectorstore, system_prompt):
     try:
         memory = ConversationBufferMemory(memory_key='chat_history', return_messages=True)
         
         if not groq_api_key:
             raise ValueError("GROQ_API_TOKEN is not set in the environment variables")
 
-        llm = GroqWrapper(api_key=groq_api_key)
+        llm = GroqWrapper(system_prompt=system_prompt)
         st.write(f"Initialized GroqWrapper with model: {llm.model_name}")
 
         conversation_chain = ConversationalRetrievalChain.from_llm(
@@ -135,11 +133,16 @@ async def main():
         st.session_state.chat_history = []
 
     st.header("Chat with multiple PDFs :books:")
-    user_question = st.text_input("Ask a question about your documents:")
-    if user_question and st.session_state.conversation:
-        await handle_userinput(user_question)
-
+    
+    # Add system prompt input in the sidebar
     with st.sidebar:
+        st.subheader("System Prompt")
+        system_prompt = st.text_area(
+            "Enter a system prompt to set the context for the AI:",
+            "You are a helpful AI assistant that answers questions based on the content of uploaded PDF documents. Provide concise and accurate responses.",
+            height=100
+        )
+        
         st.subheader("Your documents")
         pdf_docs = st.file_uploader("Upload your PDFs here and click on 'Process'", accept_multiple_files=True)
         if st.button("Process") and pdf_docs:
@@ -149,11 +152,15 @@ async def main():
                 if text_chunks:
                     vectorstore = await get_vectorstore(text_chunks)
                     if vectorstore:
-                        st.session_state.conversation = await get_conversation_chain(vectorstore)
+                        st.session_state.conversation = await get_conversation_chain(vectorstore, system_prompt)
                     else:
                         st.error("Failed to create a vector store. Please check your PDFs.")
                 else:
                     st.error("No text chunks found. Please check your PDFs.")
+
+    user_question = st.text_input("Ask a question about your documents:")
+    if user_question and st.session_state.conversation:
+        await handle_userinput(user_question)
 
 if __name__ == '__main__':
     asyncio.run(main())
