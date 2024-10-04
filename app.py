@@ -9,10 +9,10 @@ from langchain.chains import ConversationalRetrievalChain
 from langchain.llms.base import LLM
 from htmlTemplates import css, bot_template, user_template
 from groq import Groq
-import asyncio
 import os
 from typing import Any, List, Mapping, Optional
 from pydantic import BaseModel, Field
+import time
 
 # Load environment variables
 load_dotenv()
@@ -53,76 +53,60 @@ class GroqWrapper(LLM, BaseModel):
     def _identifying_params(self) -> Mapping[str, Any]:
         return {"model_name": self.model_name, "system_prompt": self.system_prompt}
 
-async def get_pdf_text(pdf_docs):
-    try:
-        text = ""
-        for pdf in pdf_docs:
-            pdf_reader = PdfReader(pdf)
-            for page in pdf_reader.pages:
-                text += page.extract_text() or ""
-        return text
-    except Exception as e:
-        st.error(f"Error processing PDF files: {e}")
-        return ""
+def get_pdf_text(pdf_docs):
+    text = ""
+    for pdf in pdf_docs:
+        pdf_reader = PdfReader(pdf)
+        for page in pdf_reader.pages:
+            text += page.extract_text() or ""
+    return text
 
-async def get_text_chunks(text):
-    try:
-        text_splitter = CharacterTextSplitter(
-            separator="\n",
-            chunk_size=1000,
-            chunk_overlap=200,
-            length_function=len
-        )
-        chunks = text_splitter.split_text(text)
-        return chunks
-    except Exception as e:
-        st.error(f"Error splitting text: {e}")
-        return []
+def get_text_chunks(text):
+    text_splitter = CharacterTextSplitter(
+        separator="\n",
+        chunk_size=1000,
+        chunk_overlap=200,
+        length_function=len
+    )
+    chunks = text_splitter.split_text(text)
+    return chunks
 
-async def get_vectorstore(text_chunks):
-    try:
-        embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-        vectorstore = FAISS.from_texts(texts=text_chunks, embedding=embeddings)
-        return vectorstore
-    except Exception as e:
-        st.error(f"Error creating vector store: {e}")
-        return None
+def get_vectorstore(text_chunks):
+    embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    vectorstore = FAISS.from_texts(texts=text_chunks, embedding=embeddings)
+    return vectorstore
 
-async def get_conversation_chain(vectorstore, system_prompt):
-    try:
-        memory = ConversationBufferMemory(memory_key='chat_history', return_messages=True)
-        
-        if not groq_api_key:
-            raise ValueError("GROQ_API_TOKEN is not set in the environment variables")
+def get_conversation_chain(vectorstore, system_prompt):
+    memory = ConversationBufferMemory(memory_key='chat_history', return_messages=True)
+    
+    if not groq_api_key:
+        raise ValueError("GROQ_API_TOKEN is not set in the environment variables")
 
-        llm = GroqWrapper(system_prompt=system_prompt)
-        st.success(f"Initialized GroqWrapper with model: {llm.model_name}")
+    llm = GroqWrapper(system_prompt=system_prompt)
+    st.success(f"Initialized GroqWrapper with model: {llm.model_name}")
 
-        conversation_chain = ConversationalRetrievalChain.from_llm(
-            llm=llm,
-            retriever=vectorstore.as_retriever(),
-            memory=memory
-        )
-        return conversation_chain
-    except Exception as e:
-        st.error(f"Error creating conversation chain: {e}")
-        return None
+    conversation_chain = ConversationalRetrievalChain.from_llm(
+        llm=llm,
+        retriever=vectorstore.as_retriever(),
+        memory=memory
+    )
+    return conversation_chain
 
-async def handle_userinput(user_question):
-    try:
-        if st.session_state.conversation:
-            response = st.session_state.conversation({'question': user_question})
-            st.session_state.chat_history = response['chat_history']
+def handle_userinput(user_question):
+    response = st.session_state.conversation({'question': user_question})
+    st.session_state.chat_history = response['chat_history']
 
-            for i, message in enumerate(st.session_state.chat_history):
-                if i % 2 == 0:
-                    st.write(user_template.replace("{{MSG}}", message.content), unsafe_allow_html=True)
-                else:
-                    st.write(bot_template.replace("{{MSG}}", message.content), unsafe_allow_html=True)
-    except Exception as e:
-        st.error(f"Error handling user input: {e}")
+    for i, message in enumerate(st.session_state.chat_history):
+        if i % 2 == 0:
+            st.session_state.messages.append({"role": "user", "content": message.content})
+        else:
+            st.session_state.messages.append({"role": "assistant", "content": message.content})
 
-async def main():
+def clear_chat_history():
+    st.session_state.messages = []
+    st.session_state.chat_history = []
+
+def main():
     st.set_page_config(page_title="PDF Chat Assistant", page_icon="📚", layout="wide")
     st.write(css, unsafe_allow_html=True)
 
@@ -130,6 +114,8 @@ async def main():
         st.session_state.conversation = None
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
 
     st.header("📚 Chat with Your PDFs")
     
@@ -149,35 +135,44 @@ async def main():
         if st.button("🔍 Process Documents", type="primary"):
             if pdf_docs:
                 with st.spinner("Processing your documents..."):
-                    raw_text = await get_pdf_text(pdf_docs)
-                    text_chunks = await get_text_chunks(raw_text)
-                    if text_chunks:
-                        vectorstore = await get_vectorstore(text_chunks)
-                        if vectorstore:
-                            st.session_state.conversation = await get_conversation_chain(vectorstore, system_prompt)
-                            st.success("Documents processed successfully! You can now ask questions.")
-                        else:
-                            st.error("Failed to create a vector store. Please check your PDFs.")
-                    else:
-                        st.error("No text chunks found. Please check your PDFs.")
+                    raw_text = get_pdf_text(pdf_docs)
+                    text_chunks = get_text_chunks(raw_text)
+                    vectorstore = get_vectorstore(text_chunks)
+                    st.session_state.conversation = get_conversation_chain(vectorstore, system_prompt)
+                    st.success("Documents processed successfully! You can now ask questions.")
             else:
                 st.warning("Please upload PDF documents before processing.")
+
+        if st.button("🧹 Clear Chat History"):
+            clear_chat_history()
+            st.rerun()
 
     with col1:
         st.subheader("💬 Chat Interface")
         user_question = st.text_input("Ask a question about your documents:", key="user_input")
-        if user_question and st.session_state.conversation:
-            await handle_userinput(user_question)
-        elif user_question and not st.session_state.conversation:
-            st.warning("Please upload and process documents before asking questions.")
-
-        # Display chat history
-        st.subheader("Chat History")
-        for i, message in enumerate(st.session_state.chat_history):
-            if i % 2 == 0:
-                st.write(user_template.replace("{{MSG}}", message.content), unsafe_allow_html=True)
+        
+        # Create a container for chat messages
+        chat_container = st.container()
+        
+        if user_question:
+            if st.session_state.conversation:
+                with st.spinner("AI is thinking..."):
+                    handle_userinput(user_question)
             else:
-                st.write(bot_template.replace("{{MSG}}", message.content), unsafe_allow_html=True)
+                st.warning("Please upload and process documents before asking questions.")
+
+        # Display chat messages with animation
+        with chat_container:
+            for i, message in enumerate(st.session_state.messages):
+                if message["role"] == "user":
+                    st.markdown(user_template.replace("{{MSG}}", message["content"]), unsafe_allow_html=True)
+                else:
+                    with st.empty():
+                        for j in range(len(message["content"]) + 1):
+                            partial_message = message["content"][:j]
+                            st.markdown(bot_template.replace("{{MSG}}", partial_message + "▌"), unsafe_allow_html=True)
+                            time.sleep(0.01)
+                        st.markdown(bot_template.replace("{{MSG}}", message["content"]), unsafe_allow_html=True)
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    main()
