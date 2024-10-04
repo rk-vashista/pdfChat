@@ -47,7 +47,6 @@ class GroqWrapper(LLM, BaseModel):
         return "groq"
 
     def get_num_tokens(self, text: str) -> int:
-        # This is a simple approximation, you might want to implement a more accurate method
         return len(text.split())
 
     @property
@@ -97,7 +96,7 @@ async def get_conversation_chain(vectorstore, system_prompt):
             raise ValueError("GROQ_API_TOKEN is not set in the environment variables")
 
         llm = GroqWrapper(system_prompt=system_prompt)
-        st.write(f"Initialized GroqWrapper with model: {llm.model_name}")
+        st.success(f"Initialized GroqWrapper with model: {llm.model_name}")
 
         conversation_chain = ConversationalRetrievalChain.from_llm(
             llm=llm,
@@ -124,7 +123,7 @@ async def handle_userinput(user_question):
         st.error(f"Error handling user input: {e}")
 
 async def main():
-    st.set_page_config(page_title="Chat with multiple PDFs", page_icon=":books:")
+    st.set_page_config(page_title="PDF Chat Assistant", page_icon="📚", layout="wide")
     st.write(css, unsafe_allow_html=True)
 
     if "conversation" not in st.session_state:
@@ -132,35 +131,53 @@ async def main():
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
 
-    st.header("Chat with multiple PDFs :books:")
+    st.header("📚 Chat with Your PDFs")
     
-    # Add system prompt input in the sidebar
-    with st.sidebar:
-        st.subheader("System Prompt")
+    col1, col2 = st.columns([2, 1])
+    
+    with col2:
+        st.subheader("📄 Document Upload")
+        pdf_docs = st.file_uploader("Upload your PDFs here", accept_multiple_files=True, type="pdf")
+        
+        st.subheader("🔧 System Prompt")
         system_prompt = st.text_area(
-            "Enter a system prompt to set the context for the AI:",
+            "Customize AI behavior:",
             "You are a helpful AI assistant that answers questions based on the content of uploaded PDF documents. Provide concise and accurate responses.",
             height=100
         )
         
-        st.subheader("Your documents")
-        pdf_docs = st.file_uploader("Upload your PDFs here and click on 'Process'", accept_multiple_files=True)
-        if st.button("Process") and pdf_docs:
-            with st.spinner("Processing"):
-                raw_text = await get_pdf_text(pdf_docs)
-                text_chunks = await get_text_chunks(raw_text)
-                if text_chunks:
-                    vectorstore = await get_vectorstore(text_chunks)
-                    if vectorstore:
-                        st.session_state.conversation = await get_conversation_chain(vectorstore, system_prompt)
+        if st.button("🔍 Process Documents", type="primary"):
+            if pdf_docs:
+                with st.spinner("Processing your documents..."):
+                    raw_text = await get_pdf_text(pdf_docs)
+                    text_chunks = await get_text_chunks(raw_text)
+                    if text_chunks:
+                        vectorstore = await get_vectorstore(text_chunks)
+                        if vectorstore:
+                            st.session_state.conversation = await get_conversation_chain(vectorstore, system_prompt)
+                            st.success("Documents processed successfully! You can now ask questions.")
+                        else:
+                            st.error("Failed to create a vector store. Please check your PDFs.")
                     else:
-                        st.error("Failed to create a vector store. Please check your PDFs.")
-                else:
-                    st.error("No text chunks found. Please check your PDFs.")
+                        st.error("No text chunks found. Please check your PDFs.")
+            else:
+                st.warning("Please upload PDF documents before processing.")
 
-    user_question = st.text_input("Ask a question about your documents:")
-    if user_question and st.session_state.conversation:
-        await handle_userinput(user_question)
+    with col1:
+        st.subheader("💬 Chat Interface")
+        user_question = st.text_input("Ask a question about your documents:", key="user_input")
+        if user_question and st.session_state.conversation:
+            await handle_userinput(user_question)
+        elif user_question and not st.session_state.conversation:
+            st.warning("Please upload and process documents before asking questions.")
+
+        # Display chat history
+        st.subheader("Chat History")
+        for i, message in enumerate(st.session_state.chat_history):
+            if i % 2 == 0:
+                st.write(user_template.replace("{{MSG}}", message.content), unsafe_allow_html=True)
+            else:
+                st.write(bot_template.replace("{{MSG}}", message.content), unsafe_allow_html=True)
 
 if __name__ == '__main__':
     asyncio.run(main())
