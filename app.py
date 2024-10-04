@@ -6,53 +6,55 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain.memory import ConversationBufferMemory
 from langchain.chains import ConversationalRetrievalChain
-from langchain.llms.base import BaseLLM
+from langchain.llms.base import LLM
 from htmlTemplates import css, bot_template, user_template
 from groq import Groq
 import asyncio
 import os
+from typing import Any, List, Mapping, Optional
 
 # Load environment variables
-load_dotenv()  # Ensure you load environment variables
+load_dotenv()
 groq_api_key = os.environ.get("GROQ_API_TOKEN")
 
-# Wrapper class to make Groq compatible with LangChain
-class GroqWrapper(BaseLLM):
-    def __init__(self, api_key):
-        super().__init__()  # Call the initializer of BaseLLM
-        if api_key is None:
-            raise ValueError("API key must be provided")
-        self.client = Groq(api_key=api_key)  # Use the passed API key directly
-        self.api_key = api_key  # Store the API key for debugging
+class GroqWrapper(LLM):
+    client: Groq = None
+    model_name: str = "llama-3.2-11b-vision-preview"
 
-    def _generate(self, prompts, stop=None):
-        responses = []
-        for prompt in prompts:
-            try:
-                completion = self.client.chat.completions.create(
-                    model="llama-3.2-11b-vision-preview",
-                    messages=[
-                        {"role": "user", "content": [{"type": "text", "text": prompt}]},
-                        {"role": "assistant", "content": ""},
-                    ],
-                    temperature=1,
-                    max_tokens=1024,
-                    top_p=1,
-                    stream=False,
-                    stop=stop,
-                )
-                responses.append(completion.choices[0].message.content)
-            except Exception as e:
-                st.error(f"Error during completion: {e}")
-                responses.append("Error occurred while generating response.")
-        return responses
+    def __init__(self, api_key: str):
+        super().__init__()
+        self.client = Groq(api_key=api_key)
+
+    def _call(self, prompt: str, stop: Optional[List[str]] = None) -> str:
+        try:
+            completion = self.client.chat.completions.create(
+                model=self.model_name,
+                messages=[
+                    {"role": "user", "content": prompt},
+                    {"role": "assistant", "content": ""},
+                ],
+                temperature=1,
+                max_tokens=1024,
+                top_p=1,
+                stream=False,
+                stop=stop,
+            )
+            return completion.choices[0].message.content
+        except Exception as e:
+            st.error(f"Error during completion: {e}")
+            return "Error occurred while generating response."
 
     @property
-    def _llm_type(self):
+    def _llm_type(self) -> str:
         return "groq"
 
-    def __str__(self):
-        return f"GroqWrapper(api_key={self.api_key})"
+    def get_num_tokens(self, text: str) -> int:
+        # This is a simple approximation, you might want to implement a more accurate method
+        return len(text.split())
+
+    @property
+    def _identifying_params(self) -> Mapping[str, Any]:
+        return {"model_name": self.model_name}
 
 async def get_pdf_text(pdf_docs):
     try:
@@ -93,9 +95,11 @@ async def get_conversation_chain(vectorstore):
     try:
         memory = ConversationBufferMemory(memory_key='chat_history', return_messages=True)
         
-        # Wrap Groq in GroqWrapper using the API key
-        llm = GroqWrapper(groq_api_key)  # Ensure the API key is passed correctly
-        st.write(f"Initialized {llm}")  # For debugging purposes
+        if not groq_api_key:
+            raise ValueError("GROQ_API_TOKEN is not set in the environment variables")
+
+        llm = GroqWrapper(api_key=groq_api_key)
+        st.write(f"Initialized GroqWrapper with model: {llm.model_name}")
 
         conversation_chain = ConversationalRetrievalChain.from_llm(
             llm=llm,
@@ -109,7 +113,7 @@ async def get_conversation_chain(vectorstore):
 
 async def handle_userinput(user_question):
     try:
-        if st.session_state.conversation:  # Ensure conversation is initialized
+        if st.session_state.conversation:
             response = st.session_state.conversation({'question': user_question})
             st.session_state.chat_history = response['chat_history']
 
@@ -142,7 +146,7 @@ async def main():
             with st.spinner("Processing"):
                 raw_text = await get_pdf_text(pdf_docs)
                 text_chunks = await get_text_chunks(raw_text)
-                if text_chunks:  # Ensure text chunks are not empty
+                if text_chunks:
                     vectorstore = await get_vectorstore(text_chunks)
                     if vectorstore:
                         st.session_state.conversation = await get_conversation_chain(vectorstore)
