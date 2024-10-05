@@ -96,11 +96,15 @@ def handle_userinput(user_question):
     response = st.session_state.conversation({'question': user_question})
     st.session_state.chat_history = response['chat_history']
 
-    for i, message in enumerate(st.session_state.chat_history):
-        if i % 2 == 0:
-            st.session_state.messages.append({"role": "user", "content": message.content})
+    # Add new messages to the beginning of the list
+    new_messages = []
+    for message in st.session_state.chat_history[-2:]:  # Get the last two messages (user question and AI response)
+        if message.type == 'human':
+            new_messages.append({"role": "user", "content": message.content})
         else:
-            st.session_state.messages.append({"role": "assistant", "content": message.content})
+            new_messages.append({"role": "assistant", "content": message.content})
+    
+    st.session_state.messages = new_messages + st.session_state.messages
 
 def clear_chat_history():
     st.session_state.messages = []
@@ -151,9 +155,6 @@ def main():
         st.subheader("💬 Chat Interface")
         user_question = st.text_input("Ask a question about your documents:", key="user_input")
         
-        # Create a container for chat messages
-        chat_container = st.container()
-        
         if user_question:
             if st.session_state.conversation:
                 with st.spinner("AI is thinking..."):
@@ -162,17 +163,16 @@ def main():
                 st.warning("Please upload and process documents before asking questions.")
 
         # Display chat messages with animation
-        with chat_container:
-            for i, message in enumerate(st.session_state.messages):
-                if message["role"] == "user":
-                    st.markdown(user_template.replace("{{MSG}}", message["content"]), unsafe_allow_html=True)
-                else:
-                    with st.empty():
-                        for j in range(len(message["content"]) + 1):
-                            partial_message = message["content"][:j]
-                            st.markdown(bot_template.replace("{{MSG}}", partial_message + "▌"), unsafe_allow_html=True)
-                            time.sleep(0.01)
-                        st.markdown(bot_template.replace("{{MSG}}", message["content"]), unsafe_allow_html=True)
+        for message in st.session_state.messages:
+            if message["role"] == "user":
+                st.markdown(user_template.replace("{{MSG}}", message["content"]), unsafe_allow_html=True)
+            else:
+                with st.empty():
+                    for j in range(len(message["content"]) + 1):
+                        partial_message = message["content"][:j]
+                        st.markdown(bot_template.replace("{{MSG}}", partial_message + "▌"), unsafe_allow_html=True)
+                        time.sleep(0.01)
+                    st.markdown(bot_template.replace("{{MSG}}", message["content"]), unsafe_allow_html=True)
 
 if __name__ == '__main__':
     main()
